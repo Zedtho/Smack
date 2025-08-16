@@ -11,7 +11,6 @@ import json
 import threading
 from dotenv import load_dotenv
 from appdirs import AppDirs
-from playsound import playsound
 from filelock import FileLock, Timeout
 import signal
 import string
@@ -19,6 +18,7 @@ import setproctitle
 import random 
 import platform
 from gui import start_GUI
+import psutil
 
 
 
@@ -87,6 +87,11 @@ def load_everything():
     }
     config_dict.update(misc_dict)
     return config_dict
+
+def get_running_process_name():
+    """Get the name of a randomly chosen running process."""
+    processes = [p.info['name'] for p in psutil.process_iter(attrs=['name']) if p.info['name']]
+    return random.choice(processes) if processes else ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
 def query_model(content, service, plans, self_description):
     try:
@@ -182,7 +187,7 @@ def main():
         if platform.system() == 'Linux':
             signal.signal(signal.SIGINT, lambda signum, frame: print("Nice try! SIGINT ignored."))
             signal.signal(signal.SIGTERM, lambda signum, frame: print("Nice try! SIGTERM ignored."))
-            setproctitle.setproctitle(''.join(random.choices(string.ascii_lowercase + string.digits, k=8)))
+            setproctitle.setproctitle(get_running_process_name())
 
     
     clientanthropic = anthropic.Anthropic(api_key=anthropic_api_key)
@@ -212,19 +217,29 @@ def main():
    
 
     """The main blocking loop"""
-    bark = resource_path('doggo.mp3')
+    bark = resource_path('doggo.wav')
     while True:
         content = input_output.read_title()
         logging.info(content)
-        if content and not content in whiteblacklist and query_wildcardlist(content, wildcardlist) == "Unsure":
+        if content and content not in whiteblacklist and query_wildcardlist(content, wildcardlist) == "Unsure":
             logging.info("Querying Claude")
             whiteblacklist[content] = query_model(content, "Claude", plans, self_description)
-        if query_wildcardlist(content, wildcardlist) == False or (query_wildcardlist(content, wildcardlist) == "Unsure" and not whiteblacklist[content]):
+        if not query_wildcardlist(content, wildcardlist) or (query_wildcardlist(content, wildcardlist) == "Unsure" and not whiteblacklist[content]):
             logging.info("Killing")
             input_output.kill_window()
             if config_dict['pavlov']:
                 try:
-                    playsound(bark)
+                    # Try mpv first (best MP3 support)
+                    if subprocess.run(['which', 'mpv'], capture_output=True).returncode == 0:
+                        subprocess.run(['mpv', '--no-video', '--really-quiet', bark], check=True)
+                    # Try ffplay (part of ffmpeg)
+                    elif subprocess.run(['which', 'ffplay'], capture_output=True).returncode == 0:
+                        subprocess.run(['ffplay', '-nodisp', '-autoexit', bark], check=True)
+                    # Fallback to system players (need WAV)
+                    elif subprocess.run(['which', 'paplay'], capture_output=True).returncode == 0:
+                        subprocess.run(['paplay', bark], check=True)
+                    else:
+                        print("No suitable audio player found for MP3")
                 except Exception as e:
                     print(f"Error playing sound: {e}")
 
